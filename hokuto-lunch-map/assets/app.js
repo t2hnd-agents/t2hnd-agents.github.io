@@ -36,6 +36,7 @@
       var sortSel = "recommended";
       var userPos = null;
       var geoRequested = false;
+      var mapCenter = null; // 現在地ボタンで指定された地図の中心（{lat, lng}）
 
       function selKey() { return sel.kind === "dow" ? "d" + sel.dow : sel.kind; }
       function targetInfo() {
@@ -59,6 +60,37 @@
         var n = new Date();
         var cur = n.getHours() * 60 + n.getMinutes();
         return cur >= start && cur < end;
+      }
+      // "HH:MM" を分に変換する（変換できなければ null）
+      function hmToMin(s) {
+        if (!s) return null;
+        var m = /^(\d{1,2}):(\d{2})$/.exec(s);
+        return m ? (+m[1]) * 60 + (+m[2]) : null;
+      }
+      // 正規化済みの lunch_start / lunch_end による営業中判定（判定できなければ null）
+      function openNowNorm(shop) {
+        var s = hmToMin(shop.lunch_start), e = hmToMin(shop.lunch_end);
+        if (s == null || e == null || e <= s) return null;
+        var n = new Date();
+        var cur = n.getHours() * 60 + n.getMinutes();
+        return cur >= s && cur < e;
+      }
+      // 残り時間表示用の営業中判定: 正規化時刻を優先し、無ければ従来の保守的な判定に寄せる
+      function isOpenNow(shop) {
+        var v = openNowNorm(shop);
+        return v != null ? v : openNow(shop);
+      }
+      function fmtDur(mins) { return Math.floor(mins / 60) + ":" + pad2(mins % 60); }
+      // 現在営業中の店の残り時間: LO があれば「LOまで」、無ければ「閉店まで」。対象外は null
+      function remainInfo(shop, t) {
+        if (!openNowActive(t) || !isOpenNow(shop)) return null;
+        var n = new Date();
+        var cur = n.getHours() * 60 + n.getMinutes();
+        var lo = hmToMin(shop.lo);
+        if (lo != null && cur < lo) return { label: "LOまで", mins: lo - cur };
+        var end = hmToMin(shop.lunch_end);
+        if (end != null && cur < end) return { label: "閉店まで", mins: end - cur };
+        return null;
       }
       function distKm(a, b) {
         var R = 6371, rad = Math.PI / 180;
@@ -194,6 +226,7 @@
         selectedId = null;
         hidePopup();
         highlightRow(null, false);
+        updateSheetDetail();
         if (mapHandle && typeof mapHandle.selectPlace === "function") mapHandle.selectPlace(null);
       });
 
@@ -296,6 +329,8 @@
         html += '<div class="top">';
         if (pinIndex != null) html += '<span class="num" aria-hidden="true">' + (pinIndex + 1) + '</span>';
         html += '<h3>' + esc(shop.name) + '</h3>';
+        var ri = remainInfo(shop, t);
+        if (ri && !closedCard) html += '<span class="remain">' + ri.label + ' ' + fmtDur(ri.mins) + '</span>';
         html += '</div>';
         var badges = "";
         if (st === "temp") badges += '<span class="badge badge--temp">本日臨時休業</span>';
@@ -340,13 +375,13 @@
       var mapFailed = false;
       var currentRows = [];
       var currentPinShops = [];
-      var mobileView = "list";
       var selectedId = null;
       var mapMountedHidden = false;
       function isNarrow() {
         return !!(window.matchMedia && window.matchMedia("(max-width: 879px)").matches);
       }
-      function mapVisible() { return !isNarrow() || mobileView === "map"; }
+      // 地図は PC・スマホとも常に表示される（スマホは全画面の背面）
+      function mapVisible() { return true; }
 
       function onMapUnavailable() {
         mapFailed = true;
@@ -354,6 +389,8 @@
         mapFallbackEl.hidden = false;
         mapNoteEl.textContent = "";
         hidePopup();
+        var lb = document.getElementById("locate-btn");
+        if (lb) lb.hidden = true;
       }
 
       function highlightRow(index, scroll) {
@@ -410,12 +447,17 @@
           selectedId = null;
           highlightRow(null, false);
           hidePopup();
+          updateSheetDetail();
           return;
         }
         selectedId = currentPinShops[index].id;
-        // スマホの地図表示では一覧へスクロールせず、地図下部のミニカードで見せる
+        // スマホでは一覧へスクロールせず、ボトムシートの中段に詳細カードを出す
         highlightRow(index, !isNarrow());
         showPopup(currentPinShops[index]);
+        if (isNarrow()) {
+          updateSheetDetail();
+          setSheetState("mid");
+        }
       }
 
       function restoreSelection() {
@@ -520,7 +562,7 @@
           unknownCardsEl.querySelectorAll(".card").forEach(function (c) { cardById[c.getAttribute("data-id")] = c; });
           currentRows = pinEntries.map(function (e) { return cardById[e.shop.id] || null; });
           currentPinShops = pinEntries.map(function (e) { return e.shop; });
-          mapHandle = MapHelpers.mountMap(mapEl, {
+          var mountOpts = {
             places: places,
             baseStyle: "light",
             marker: function (place, index, selected) {
@@ -528,15 +570,23 @@
                 + '"><span>' + (index + 1) + '</span></div>';
             },
             onSelectPlace: function (index) { onPinSelect(index); }
-          }, onMapUnavailable);
+          };
+          // 現在地ボタンで中心が指定されているときは、その位置を中心に表示する
+          if (mapCenter) { mountOpts.center = mapCenter; mountOpts.zoom = 14; }
+          mapHandle = MapHelpers.mountMap(mapEl, mountOpts, onMapUnavailable);
           mapMountedHidden = mapEl.clientWidth === 0;
           currentRows.forEach(function (row, i) {
             if (!row) return;
-            row.addEventListener("click", function () {
+            row.addEventListener("click", function (ev) {
               selectedId = currentPinShops[i].id;
               if (mapHandle && typeof mapHandle.selectPlace === "function") mapHandle.selectPlace(i);
               highlightRow(i, false);
               if (mapVisible()) showPopup(currentPinShops[i]);
+              if (isNarrow()) {
+                updateSheetDetail();
+                // カード内のリンクを押したときはシートを動かさない
+                if (!(ev.target.closest && ev.target.closest("a"))) setSheetState("mid");
+              }
             });
           });
           if (selectedId && mapVisible()) restoreSelection();
@@ -549,39 +599,237 @@
         } else if (!mapFailed) {
           mapNoteEl.textContent = "";
         }
-      }
-
-      // ---- スマホ幅の一覧／地図タブ ----
-      var viewTabs = document.querySelectorAll(".view-tab");
-      var viewTabsEl = document.querySelector(".view-tabs");
-      function setMobileView(view) {
-        mobileView = view;
-        layoutEl.setAttribute("data-mview", view);
-        viewTabs.forEach(function (tab) {
-          tab.setAttribute("aria-pressed", String(tab.getAttribute("data-view") === view));
-        });
-        if (view === "map") {
-          // 非表示の間にマウントされた地図は、表示状態でマウントし直す
-          if (mapMountedHidden) { mapMountedHidden = false; render(); }
-          restoreSelection();
-          // タブが画面上部（固定の曜日バーの下）に来る位置までスクロールする
-          var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-          viewTabsEl.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+        // スマホ: 詳細カードとシートの高さ（畳んだ状態は見出しの高さ）を最新に保つ
+        if (isNarrow()) {
+          updateSheetDetail();
+          applySheet(false);
         }
       }
-      viewTabs.forEach(function (tab) {
-        tab.addEventListener("click", function () { setMobileView(tab.getAttribute("data-view")); });
-      });
 
-      // ---- スマホ幅では並び順セレクトを結果行の右側へ移し、広い画面では元の位置へ戻す ----
-      // ---- あわせて臨時休業ボックスは、広い画面では一覧カラムの先頭へ、スマホ幅では曜日バーの上へ置く ----
+      // ---- スマホ幅: ボトムシート（畳む／中段／全開の3段階） ----
       var sortWrapEl = document.querySelector(".sort-wrap");
       var controlsEl = document.querySelector(".controls");
       var resultRowEl = document.querySelector(".result-row");
       var statusEl = document.getElementById("today-status");
       var daybarEl = document.querySelector(".daybar");
       var listColEl = document.querySelector(".list-col");
+      var wrapEl = document.querySelector(".wrap");
+      var footerEl = document.querySelector("footer.caution");
       var mobileMq = window.matchMedia ? window.matchMedia("(max-width: 879px)") : { matches: false };
+
+      // シートの見出し（ハンドル＋件数・並び順）と詳細カードの置き場を用意する（広い画面では非表示）
+      var sheetHeadEl = document.createElement("div");
+      sheetHeadEl.className = "sheet-head";
+      var sheetHandleEl = document.createElement("button");
+      sheetHandleEl.type = "button";
+      sheetHandleEl.className = "sheet-handle";
+      sheetHandleEl.setAttribute("aria-label", "お店一覧のパネルを開閉");
+      sheetHandleEl.innerHTML = "<span></span>";
+      sheetHeadEl.appendChild(sheetHandleEl);
+      listColEl.insertBefore(sheetHeadEl, listColEl.firstChild);
+      var sheetDetailEl = document.createElement("div");
+      sheetDetailEl.id = "sheet-detail";
+      sheetDetailEl.hidden = true;
+      listColEl.insertBefore(sheetDetailEl, sheetHeadEl.nextSibling);
+      listColEl.setAttribute("data-sheet", "collapsed");
+      listColEl.setAttribute("data-detail", "0");
+
+      var sheetState = "collapsed"; // collapsed | mid | full
+      var sheetDrag = null;
+      function sheetHeights() {
+        var padB = parseFloat(getComputedStyle(listColEl).paddingBottom) || 0;
+        var collapsed = sheetHeadEl.offsetHeight + padB;
+        var full = window.innerHeight - daybarEl.getBoundingClientRect().bottom - 6;
+        if (full < collapsed + 160) full = collapsed + 160;
+        var mid = Math.min(330, full);
+        if (mid < collapsed) mid = collapsed;
+        return { collapsed: collapsed, mid: mid, full: full };
+      }
+      function applySheet(animate) {
+        if (!isNarrow()) { listColEl.style.height = ""; return; }
+        var h = sheetHeights()[sheetState];
+        if (!animate) listColEl.classList.add("dragging");
+        listColEl.style.height = h + "px";
+        wrapEl.style.setProperty("--sheet-h", h + "px");
+        if (!animate) { void listColEl.offsetHeight; listColEl.classList.remove("dragging"); }
+      }
+      function setSheetState(state) {
+        sheetState = state;
+        listColEl.setAttribute("data-sheet", state);
+        applySheet(true);
+      }
+      function cycleSheet() {
+        if (sheetState === "collapsed") setSheetState("mid");
+        else if (sheetState === "mid") setSheetState("full");
+        else setSheetState("collapsed");
+      }
+
+      // 中段に出す詳細カード（選んだ店＋近くで営業中の店）
+      function sheetDetailHTML(shop) {
+        var t = targetInfo();
+        var tempSet = (sel.kind === "today" && statusRecord && statusRecord.date === todayISO) ? tempClosedIds : {};
+        var st = stateOf(shop, t, tempSet);
+        var closedCard = st === "temp" || st === "cal";
+        var pinIndex = null;
+        currentPinShops.forEach(function (s, i) { if (s.id === shop.id) pinIndex = i; });
+        var html = '<article class="card sheet-detail-card' + (closedCard ? ' card--closed' : '') + '">';
+        html += '<button type="button" class="sheet-detail-close" aria-label="詳細を閉じる">×</button>';
+        html += '<div class="top">';
+        if (pinIndex != null) html += '<span class="num" aria-hidden="true">' + (pinIndex + 1) + '</span>';
+        html += '<h3>' + esc(shop.name) + '</h3>';
+        html += '</div>';
+        var badges = "";
+        if (st === "temp") badges += '<span class="badge badge--temp">本日臨時休業</span>';
+        if (st === "cal") badges += '<span class="badge badge--cal">カレンダーで休業</span>';
+        if (!closedCard && openNowActive(t) && openNow(shop)) badges += '<span class="badge badge--open">営業中</span>';
+        if (badges) html += '<p class="badges">' + badges + '</p>';
+        var ri = remainInfo(shop, t);
+        if (ri && !closedCard) html += '<p class="remain-line">' + ri.label + ' あと ' + fmtDur(ri.mins) + '</p>';
+        html += '<p class="meta"><span class="town">' + esc(shop.town) + '</span>'
+          + '<span class="genre">' + esc(shop.genre) + '</span>'
+          + (shop.hours ? '<span class="hours">' + esc(shop.hours) + '</span>' : '')
+          + '</p>';
+        html += '<p class="links">'
+          + '<a class="route-btn" href="' + directionsUrl(shop) + '" target="_blank" rel="noopener noreferrer">' + ROUTE_LABEL + '</a>';
+        if (shop.ig) {
+          html += '<a class="ig-btn" href="https://www.instagram.com/' + encodeURIComponent(shop.ig) + '" target="_blank" rel="noopener noreferrer">'
+            + IG_SVG + '<span>@' + esc(shop.ig) + '</span></a>';
+        } else {
+          var siteUrl = shop.source_url ? safeUrl(shop.source_url) : null;
+          if (siteUrl) {
+            html += '<a class="site-btn" href="' + esc(siteUrl) + '" target="_blank" rel="noopener noreferrer">'
+              + LINK_SVG + '<span>公式サイト</span></a>';
+          }
+        }
+        html += '</p>';
+        if (openNowActive(t) && !closedCard && typeof shop.lat === "number") {
+          var near = [];
+          SHOPS.forEach(function (s) {
+            if (s.id === shop.id) return;
+            if (typeof s.lat !== "number" || typeof s.lng !== "number") return;
+            if (stateOf(s, t, tempSet) !== "open") return;
+            if (!isOpenNow(s)) return;
+            near.push({ shop: s, dist: distKm(shop, s) });
+          });
+          near.sort(function (a, b) { return a.dist - b.dist; });
+          near = near.slice(0, 3);
+          if (near.length) {
+            html += '<p class="nearby-title">近くで営業中のお店</p>';
+            near.forEach(function (n) {
+              var nri = remainInfo(n.shop, t);
+              var meta = esc(n.shop.town) + '・約' + n.dist.toFixed(1) + 'km';
+              if (nri) meta += '・' + nri.label + ' ' + fmtDur(nri.mins);
+              html += '<button type="button" class="nearby-row" data-id="' + esc(n.shop.id) + '">'
+                + '<span class="n-name">' + esc(n.shop.name) + '</span>'
+                + '<span class="n-meta">' + meta + '</span></button>';
+            });
+          }
+        }
+        html += '</article>';
+        return html;
+      }
+      function updateSheetDetail() {
+        if (!sheetDetailEl) return;
+        var shop = null;
+        if (selectedId) {
+          for (var i = 0; i < SHOPS.length; i++) {
+            if (SHOPS[i].id === selectedId) { shop = SHOPS[i]; break; }
+          }
+        }
+        if (!shop) {
+          sheetDetailEl.innerHTML = "";
+          sheetDetailEl.hidden = true;
+        } else {
+          sheetDetailEl.innerHTML = sheetDetailHTML(shop);
+          sheetDetailEl.hidden = false;
+        }
+        listColEl.setAttribute("data-detail", shop ? "1" : "0");
+      }
+      sheetDetailEl.addEventListener("click", function (ev) {
+        if (ev.target.closest && ev.target.closest(".sheet-detail-close")) {
+          selectedId = null;
+          hidePopup();
+          highlightRow(null, false);
+          if (mapHandle && typeof mapHandle.selectPlace === "function") mapHandle.selectPlace(null);
+          updateSheetDetail();
+          return;
+        }
+        var row = ev.target.closest ? ev.target.closest(".nearby-row") : null;
+        if (row) {
+          var id = row.getAttribute("data-id");
+          var idx = -1;
+          currentPinShops.forEach(function (s, i) { if (s.id === id) idx = i; });
+          selectedId = id;
+          if (idx >= 0) {
+            if (mapHandle && typeof mapHandle.selectPlace === "function") mapHandle.selectPlace(idx);
+            highlightRow(idx, false);
+          }
+          updateSheetDetail();
+        }
+      });
+
+      // ハンドルのドラッグで高さを変え、離した位置に一番近い段階へ吸着させる。タップは段階を順に切り替える
+      var suppressHandleClick = false;
+      sheetHandleEl.addEventListener("pointerdown", function (ev) {
+        if (!isNarrow()) return;
+        sheetDrag = { y: ev.clientY, h: listColEl.offsetHeight, moved: false };
+        try { sheetHandleEl.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+        listColEl.classList.add("dragging");
+      });
+      sheetHandleEl.addEventListener("pointermove", function (ev) {
+        if (!sheetDrag) return;
+        var dy = sheetDrag.y - ev.clientY;
+        if (Math.abs(dy) > 4) sheetDrag.moved = true;
+        var hs = sheetHeights();
+        var h = Math.min(Math.max(sheetDrag.h + dy, hs.collapsed), hs.full);
+        listColEl.style.height = h + "px";
+        wrapEl.style.setProperty("--sheet-h", h + "px");
+      });
+      function endSheetDrag() {
+        if (!sheetDrag) return;
+        var wasMoved = sheetDrag.moved;
+        sheetDrag = null;
+        listColEl.classList.remove("dragging");
+        if (wasMoved) {
+          suppressHandleClick = true;
+          var hs = sheetHeights();
+          var cur = listColEl.offsetHeight;
+          var best = "collapsed", bestD = Infinity;
+          [["collapsed", hs.collapsed], ["mid", hs.mid], ["full", hs.full]].forEach(function (p) {
+            var d = Math.abs(cur - p[1]);
+            if (d < bestD) { bestD = d; best = p[0]; }
+          });
+          setSheetState(best);
+        }
+      }
+      sheetHandleEl.addEventListener("pointerup", endSheetDrag);
+      sheetHandleEl.addEventListener("pointercancel", endSheetDrag);
+      sheetHandleEl.addEventListener("click", function () {
+        if (suppressHandleClick) { suppressHandleClick = false; return; }
+        if (isNarrow()) cycleSheet();
+      });
+      window.addEventListener("resize", function () {
+        if (isNarrow() && !sheetDrag) applySheet(false);
+      });
+
+      // 現在地ボタン: 位置情報を取得し、地図の中心を現在地へ移す（近い順の並び替えとも位置を共有）
+      var locateBtn = document.getElementById("locate-btn");
+      locateBtn.addEventListener("click", function () {
+        if (!navigator.geolocation) return;
+        geoRequested = true;
+        navigator.geolocation.getCurrentPosition(function (pos) {
+          userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          mapCenter = { lat: userPos.lat, lng: userPos.lng };
+          render();
+        }, function () { /* 取得できない場合は何もしない */ },
+        { timeout: 8000, maximumAge: 600000 });
+      });
+
+      // ---- 画面幅に応じて要素の置き場所を切り替える ----
+      // 並び順セレクト: スマホ幅では結果行の右側へ、広い画面ではコントロール帯へ
+      // 臨時休業ボックス: 一覧カラムの先頭（スマホ幅では全開時の一覧の先頭になる）
+      // ジャンルチップ: スマホ幅では曜日ボタンと同じ1段の横スクロール行へ
+      // 件数・並び順の行と注意書き: スマホ幅ではボトムシートの中へ
       function placeSort() {
         if (mobileMq.matches) {
           if (sortWrapEl.parentNode !== resultRowEl) resultRowEl.appendChild(sortWrapEl);
@@ -591,8 +839,8 @@
       }
       function placeStatus() {
         if (mobileMq.matches) {
-          if (statusEl.parentNode !== daybarEl.parentNode) {
-            daybarEl.parentNode.insertBefore(statusEl, daybarEl);
+          if (statusEl.parentNode !== listColEl) {
+            listColEl.insertBefore(statusEl, cardsEl);
           }
         } else {
           if (statusEl.parentNode !== listColEl) {
@@ -600,7 +848,25 @@
           }
         }
       }
-      function placeResponsive() { placeSort(); placeStatus(); }
+      function placeResponsive() {
+        if (mobileMq.matches) {
+          listColEl.setAttribute("data-sheet", sheetState);
+          if (chipsEl.parentNode !== daysEl) daysEl.appendChild(chipsEl);
+          if (resultRowEl.parentNode !== sheetHeadEl) sheetHeadEl.appendChild(resultRowEl);
+          if (footerEl.parentNode !== listColEl) listColEl.appendChild(footerEl);
+        } else {
+          if (chipsEl.parentNode !== controlsEl) {
+            controlsEl.insertBefore(chipsEl, sortWrapEl.parentNode === controlsEl ? sortWrapEl : null);
+          }
+          if (resultRowEl.parentNode !== wrapEl) wrapEl.insertBefore(resultRowEl, layoutEl);
+          if (footerEl.parentNode !== wrapEl) wrapEl.appendChild(footerEl);
+          listColEl.style.height = "";
+          listColEl.removeAttribute("data-sheet");
+        }
+        placeSort();
+        placeStatus();
+        if (mobileMq.matches) applySheet(false);
+      }
       placeResponsive();
       if (mobileMq.addEventListener) mobileMq.addEventListener("change", placeResponsive);
       else if (mobileMq.addListener) mobileMq.addListener(placeResponsive);
