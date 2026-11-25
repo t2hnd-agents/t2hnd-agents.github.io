@@ -99,6 +99,15 @@
           + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
         return 2 * R * Math.asin(Math.sqrt(s));
       }
+      // 現在地からの距離表示（1km未満は10m単位の m、以上は小数1桁の km）。位置情報が無ければ空文字
+      function fmtDist(km) {
+        if (km < 1) return "約" + Math.max(10, Math.round(km * 100) * 10) + "m";
+        return "約" + (Math.round(km * 10) / 10).toFixed(1) + "km";
+      }
+      function distLabel(shop) {
+        if (!userPos || typeof shop.lat !== "number" || typeof shop.lng !== "number") return "";
+        return fmtDist(distKm(userPos, shop));
+      }
 
       // ---- 臨時休業情報: Algolia の hokuto_lunch_status インデックスを開くたびに読み込む（このページには埋め込まない） ----
       var ALGOLIA_STATUS_URL = "https://RSD0T4TUIS-dsn.algolia.net/1/indexes/hokuto_lunch_status/query";
@@ -228,6 +237,7 @@
         highlightRow(null, false);
         updateSheetDetail();
         if (mapHandle && typeof mapHandle.selectPlace === "function") mapHandle.selectPlace(null);
+        scheduleClusterUpdate();
       });
 
       document.getElementById("total-count").textContent = SHOPS.length;
@@ -299,7 +309,7 @@
           if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(function (pos) {
               userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-              if (sortSel === "near") render();
+              render();
             }, function () { /* 取得できない場合は従来の並びのまま */ },
             { timeout: 8000, maximumAge: 600000 });
           }
@@ -337,9 +347,11 @@
         if (st === "cal") badges += '<span class="badge badge--cal">カレンダーで休業</span>';
         if (!closedCard && openNowActive(t) && openNow(shop)) badges += '<span class="badge badge--open">営業中</span>';
         if (badges) html += '<p class="badges">' + badges + '</p>';
+        var cardDist = distLabel(shop);
         html += '<p class="meta"><span class="town">' + esc(shop.town) + '</span>'
           + '<span class="genre">' + esc(shop.genre) + '</span>'
           + (shop.hours ? '<span class="hours">' + esc(shop.hours) + '</span>' : '')
+          + (cardDist ? '<span class="dist">' + cardDist + '</span>' : '')
           + '</p>';
         if (shop.note) html += '<p class="note">' + esc(shop.note) + '</p>';
         if (t.mode === "date" && shop.has_calendar && shop.calendar_month !== monthOf(t.date)) {
@@ -375,6 +387,7 @@
       var mapFailed = false;
       var currentRows = [];
       var currentPinShops = [];
+      var currentPinClosed = [];
       var selectedId = null;
       var mapMountedHidden = false;
       function isNarrow() {
@@ -458,6 +471,7 @@
           updateSheetDetail();
           setSheetState("mid");
         }
+        scheduleClusterUpdate();
       }
 
       function restoreSelection() {
@@ -472,6 +486,7 @@
 
       function render() {
         hidePopup();
+        hideClusterList();
         daysEl.querySelectorAll(".day-btn").forEach(function (btn) {
           btn.setAttribute("aria-pressed", String(btn.getAttribute("data-key") === selKey()));
         });
@@ -547,8 +562,12 @@
           try { mapHandle.destroy(); } catch (err) { /* ignore */ }
           mapHandle = null;
         }
+        if (clusterLayerEl) clusterLayerEl.innerHTML = "";
+        clusterGroups = [];
+        clusterSig = "";
         currentRows = [];
         currentPinShops = [];
+        currentPinClosed = [];
         if (!mapFailed && window.MapHelpers && pinEntries.length) {
           var places = pinEntries.map(function (e) {
             return {
@@ -562,6 +581,7 @@
           unknownCardsEl.querySelectorAll(".card").forEach(function (c) { cardById[c.getAttribute("data-id")] = c; });
           currentRows = pinEntries.map(function (e) { return cardById[e.shop.id] || null; });
           currentPinShops = pinEntries.map(function (e) { return e.shop; });
+          currentPinClosed = pinEntries.map(function (e) { return e.st === "temp" || e.st === "cal"; });
           var mountOpts = {
             places: places,
             baseStyle: "light",
@@ -571,9 +591,15 @@
             },
             onSelectPlace: function (index) { onPinSelect(index); }
           };
-          // 現在地ボタンで中心が指定されているときは、その位置を中心に表示する
-          if (mapCenter) { mountOpts.center = mapCenter; mountOpts.zoom = 14; }
+          // まとめピンのタップで指定された表示範囲があれば最優先、次に現在地ボタンで指定された中心
+          if (pendingView) {
+            mountOpts.center = pendingView.center;
+            mountOpts.zoom = pendingView.zoom;
+            pendingView = null;
+          } else if (mapCenter) { mountOpts.center = mapCenter; mountOpts.zoom = 14; }
           mapHandle = MapHelpers.mountMap(mapEl, mountOpts, onMapUnavailable);
+          // マーカーは非同期に描画されるため、少し遅れてまとめ表示を再計算する
+          [150, 600, 1400].forEach(function (ms) { setTimeout(scheduleClusterUpdate, ms); });
           mapMountedHidden = mapEl.clientWidth === 0;
           currentRows.forEach(function (row, i) {
             if (!row) return;
@@ -604,6 +630,262 @@
           updateSheetDetail();
           applySheet(false);
         }
+      }
+
+      // ---- ピンのまとめ表示 ----
+      // 地図ライブラリにクラスタ機能がないため、マーカー（DOM）の画面座標を測ってアプリ側でまとめる。
+      // 地図の移動・ズームではマーカーの transform が書き換わるので、MutationObserver で検知して再計算する。
+      var CLUSTER_PX = 48;
+      var pendingView = null; // まとめピンのタップで次回マウント時に使う表示範囲 {center, zoom}
+      var clusterLayerEl = null;
+      var clusterListEl = null;
+      var clusterListItemsEl = null;
+      var clusterGroups = []; // {members:[pinIndex], x, y, closedCount, sameSpot}
+      var lastPts = null; // 直近のマーカーのアンカー座標（currentPinShops と同順）
+      var clusterSig = "";
+      var clusterRafId = 0;
+
+      function ensureClusterEls() {
+        if (!clusterLayerEl) {
+          clusterLayerEl = document.createElement("div");
+          clusterLayerEl.className = "cluster-layer";
+          clusterLayerEl.addEventListener("click", function (ev) {
+            var btn = ev.target.closest ? ev.target.closest(".cluster-pin") : null;
+            if (!btn) return;
+            var g = clusterGroups[parseInt(btn.getAttribute("data-group"), 10)];
+            if (g) onClusterTap(g);
+          });
+          mapWrapEl.appendChild(clusterLayerEl);
+        }
+        if (!clusterListEl) {
+          clusterListEl = document.createElement("div");
+          clusterListEl.className = "cluster-list";
+          clusterListEl.hidden = true;
+          clusterListEl.innerHTML = '<button type="button" class="cluster-list-close" aria-label="リストを閉じる">×</button>'
+            + '<p class="cl-title">同じ場所のお店</p><div class="cl-items"></div>';
+          clusterListItemsEl = clusterListEl.querySelector(".cl-items");
+          clusterListEl.querySelector(".cluster-list-close").addEventListener("click", hideClusterList);
+          clusterListItemsEl.addEventListener("click", function (ev) {
+            var btn = ev.target.closest ? ev.target.closest(".cl-item") : null;
+            if (!btn) return;
+            selectShopIndex(parseInt(btn.getAttribute("data-index"), 10));
+          });
+          mapWrapEl.appendChild(clusterListEl);
+        }
+      }
+
+      function hideClusterList() { if (clusterListEl) clusterListEl.hidden = true; }
+
+      // マーカーのアンカー座標（下端中央＝投影点）を地図ラッパー基準で返す。ピンの番号で対応付けする
+      function markerPoints() {
+        var markers = mapEl.querySelectorAll(".maplibregl-marker");
+        if (!markers.length || markers.length !== currentPinShops.length) return null;
+        var wrapRect = mapWrapEl.getBoundingClientRect();
+        var byIndex = [], seen = {}, ok = true;
+        for (var k = 0; k < markers.length; k++) {
+          var numEl = markers[k].querySelector(".pin span");
+          var n = numEl ? parseInt(numEl.textContent, 10) : NaN;
+          if (isNaN(n) || n < 1 || n > markers.length || seen[n]) { ok = false; break; }
+          seen[n] = true;
+          byIndex[n - 1] = markers[k];
+        }
+        var ordered = ok ? byIndex : markers;
+        var pts = [];
+        for (var i = 0; i < markers.length; i++) {
+          var r = ordered[i].getBoundingClientRect();
+          pts.push({ el: ordered[i], x: r.left + r.width / 2 - wrapRect.left, y: r.bottom - wrapRect.top });
+        }
+        return pts;
+      }
+
+      function scheduleClusterUpdate() {
+        if (clusterRafId) return;
+        clusterRafId = requestAnimationFrame(function () {
+          clusterRafId = 0;
+          computeClusters();
+        });
+      }
+
+      function computeClusters() {
+        ensureClusterEls();
+        if (mapFailed || !currentPinShops.length) {
+          clusterGroups = []; lastPts = null; clusterSig = "";
+          clusterLayerEl.innerHTML = "";
+          return;
+        }
+        var pts = markerPoints();
+        if (!pts) return; // マーカー描画の途中。次の変化で再計算される
+        lastPts = pts;
+        var sig = (selectedId || "") + "|" + currentPinClosed.map(function (c) { return c ? "1" : "0"; }).join("")
+          + "|" + pts.map(function (p) { return Math.round(p.x) + "," + Math.round(p.y); }).join(";");
+        if (sig === clusterSig) return;
+        clusterSig = sig;
+        var selIdx = -1;
+        if (selectedId) currentPinShops.forEach(function (s, i) { if (s.id === selectedId) selIdx = i; });
+        var used = {}, groups = [];
+        for (var i = 0; i < pts.length; i++) {
+          if (used[i] || i === selIdx) continue;
+          var members = [i];
+          used[i] = true;
+          for (var j = i + 1; j < pts.length; j++) {
+            if (used[j] || j === selIdx) continue;
+            var dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
+            if (dx * dx + dy * dy <= CLUSTER_PX * CLUSTER_PX) { members.push(j); used[j] = true; }
+          }
+          if (members.length > 1) groups.push(members);
+        }
+        var inGroup = {};
+        clusterGroups = groups.map(function (members) {
+          var sx = 0, sy = 0, closedCount = 0, sameSpot = true;
+          var first = currentPinShops[members[0]];
+          members.forEach(function (mi) {
+            inGroup[mi] = true;
+            sx += pts[mi].x; sy += pts[mi].y;
+            if (currentPinClosed[mi]) closedCount++;
+            var s = currentPinShops[mi];
+            if (s.lat !== first.lat || s.lng !== first.lng) sameSpot = false;
+          });
+          return { members: members, x: sx / members.length, y: sy / members.length, closedCount: closedCount, sameSpot: sameSpot };
+        });
+        // まとめられた通常ピンは隠す（visibility なので座標は引き続き測れる）
+        pts.forEach(function (p, i) {
+          var v = inGroup[i] ? "hidden" : "";
+          if (p.el.style.visibility !== v) p.el.style.visibility = v;
+        });
+        clusterLayerEl.innerHTML = clusterGroups.map(function (g, gi) {
+          return '<button type="button" class="cluster-pin" data-group="' + gi + '" style="left:' + g.x.toFixed(1) + 'px;top:' + (g.y - 14).toFixed(1) + 'px" aria-label="'
+            + g.members.length + '店が重なっています">'
+            + '<span>' + g.members.length + '</span>'
+            + (g.closedCount ? '<span class="c-closed">（休' + g.closedCount + '）</span>' : '')
+            + '</button>';
+        }).join("");
+      }
+
+      // 地図の移動・ズーム（マーカーやキャンバスの style 変化）を検知してまとめ直す
+      var clusterObserver = new MutationObserver(function () { scheduleClusterUpdate(); });
+      clusterObserver.observe(mapEl, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+      window.addEventListener("resize", scheduleClusterUpdate);
+
+      // 実機ではピンのタップがわずかな指の動きでドラッグ扱いになり、click が発火しないことがある。
+      // pointerdown/up の移動が小さいタップを拾って選択を補完する（通常の click と重なっても同じ店の再選択で無害）
+      function markerIndexOfEl(el) {
+        if (!el) return -1;
+        var numEl = el.querySelector(".pin span");
+        var n = numEl ? parseInt(numEl.textContent, 10) : NaN;
+        return isNaN(n) ? -1 : n - 1;
+      }
+      var markerTapStart = null;
+      mapEl.addEventListener("pointerdown", function (ev) {
+        var m = ev.target && ev.target.closest ? ev.target.closest(".maplibregl-marker") : null;
+        markerTapStart = m ? { idx: markerIndexOfEl(m), x: ev.clientX, y: ev.clientY, t: Date.now() } : null;
+      });
+      mapEl.addEventListener("pointerup", function (ev) {
+        if (!markerTapStart) return;
+        var start = markerTapStart;
+        markerTapStart = null;
+        if (start.idx < 0) return;
+        var m = ev.target && ev.target.closest ? ev.target.closest(".maplibregl-marker") : null;
+        if (!m || markerIndexOfEl(m) !== start.idx) return;
+        var dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+        if (dx * dx + dy * dy > 144 || Date.now() - start.t > 600) return;
+        selectShopIndex(start.idx);
+      });
+      mapEl.addEventListener("pointercancel", function () { markerTapStart = null; });
+
+      // Web Mercator のズーム0基準の投影（まとめピンの拡大範囲の計算用）
+      function project0(lat, lng) {
+        var x = (lng + 180) / 360 * 256;
+        var s = Math.sin(lat * Math.PI / 180);
+        var y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 256;
+        return { x: x, y: y };
+      }
+      function unproject0(x, y) {
+        var lng = x / 256 * 360 - 180;
+        var n = Math.PI - 2 * Math.PI * y / 256;
+        var lat = 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+        return { lat: lat, lng: lng };
+      }
+      // 現在のズームをマーカー間の実測距離から推定する
+      function measureZoom() {
+        if (!lastPts || lastPts.length < 2) return null;
+        var best = null;
+        for (var i = 0; i < lastPts.length; i++) {
+          for (var j = i + 1; j < lastPts.length; j++) {
+            var a = currentPinShops[i], b = currentPinShops[j];
+            if (!a || !b) continue;
+            var pa = project0(a.lat, a.lng), pb = project0(b.lat, b.lng);
+            var wdx = pb.x - pa.x, wdy = pb.y - pa.y;
+            var wd = Math.sqrt(wdx * wdx + wdy * wdy);
+            if (wd < 0.5) continue;
+            var pdx = lastPts[j].x - lastPts[i].x, pdy = lastPts[j].y - lastPts[i].y;
+            var pd = Math.sqrt(pdx * pdx + pdy * pdy);
+            if (!best || wd > best.wd) best = { wd: wd, pd: pd };
+          }
+        }
+        if (!best || best.pd <= 0) return null;
+        return Math.log2(best.pd / best.wd);
+      }
+      // グループ全体が収まる表示範囲（fitBounds 相当）を計算する
+      function fitViewForShops(shops) {
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        shops.forEach(function (s) {
+          var p = project0(s.lat, s.lng);
+          if (p.x < minX) minX = p.x;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.y > maxY) maxY = p.y;
+        });
+        var dx = Math.max(maxX - minX, 0.01), dy = Math.max(maxY - minY, 0.01);
+        var w = mapEl.clientWidth || 600;
+        var h = mapEl.clientHeight || 400;
+        if (isNarrow()) h = Math.max(h - listColEl.offsetHeight, 200);
+        var availW = Math.max(w - 120, 120), availH = Math.max(h - 120, 120);
+        var zoom = Math.min(Math.log2(availW / dx), Math.log2(availH / dy));
+        var cz = measureZoom();
+        if (cz != null && zoom < cz + 0.75) zoom = cz + 0.75;
+        zoom = Math.max(2, Math.min(16, zoom));
+        var c = unproject0((minX + maxX) / 2, (minY + maxY) / 2);
+        return { center: c, zoom: Math.round(zoom * 100) / 100 };
+      }
+
+      function onClusterTap(g) {
+        if (g.sameSpot) { showClusterList(g); return; }
+        hideClusterList();
+        pendingView = fitViewForShops(g.members.map(function (mi) { return currentPinShops[mi]; }));
+        render();
+      }
+
+      // 完全に同じ座標の店同士は拡大しても分かれないので、店名の選択リストを出す
+      function showClusterList(g) {
+        ensureClusterEls();
+        clusterListItemsEl.innerHTML = g.members.map(function (mi) {
+          var s = currentPinShops[mi];
+          return '<button type="button" class="cl-item" data-index="' + mi + '">'
+            + '<span>' + esc(s.name) + '</span>'
+            + (currentPinClosed[mi] ? '<span class="badge badge--temp">本日臨時休業</span>' : '')
+            + '</button>';
+        }).join("");
+        clusterListEl.hidden = false;
+        if (isNarrow()) {
+          clusterListEl.style.left = "";
+          clusterListEl.style.top = "";
+          return;
+        }
+        var wrapRect = mapWrapEl.getBoundingClientRect();
+        var pw = clusterListEl.offsetWidth, ph = clusterListEl.offsetHeight;
+        var left = Math.min(Math.max(g.x - pw / 2, 6), Math.max(wrapRect.width - pw - 6, 6));
+        var top = g.y - ph - 46;
+        if (top < 6) top = g.y + 18;
+        clusterListEl.style.left = left + "px";
+        clusterListEl.style.top = top + "px";
+      }
+
+      // 店名リストから選んだ店を開く（通常ピンのタップと同じ動作）
+      function selectShopIndex(idx) {
+        hideClusterList();
+        if (idx == null || !currentPinShops[idx]) return;
+        if (mapHandle && typeof mapHandle.selectPlace === "function") mapHandle.selectPlace(idx);
+        onPinSelect(idx);
       }
 
       // ---- スマホ幅: ボトムシート（畳む／中段／全開の3段階） ----
@@ -685,9 +967,11 @@
         if (badges) html += '<p class="badges">' + badges + '</p>';
         var ri = remainInfo(shop, t);
         if (ri && !closedCard) html += '<p class="remain-line">' + ri.label + ' あと ' + fmtDur(ri.mins) + '</p>';
+        var detailDist = distLabel(shop);
         html += '<p class="meta"><span class="town">' + esc(shop.town) + '</span>'
           + '<span class="genre">' + esc(shop.genre) + '</span>'
           + (shop.hours ? '<span class="hours">' + esc(shop.hours) + '</span>' : '')
+          + (detailDist ? '<span class="dist">' + detailDist + '</span>' : '')
           + '</p>';
         html += '<p class="links">'
           + '<a class="route-btn" href="' + directionsUrl(shop) + '" target="_blank" rel="noopener noreferrer">' + ROUTE_LABEL + '</a>';

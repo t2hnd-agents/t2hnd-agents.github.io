@@ -127,6 +127,47 @@
       .pin > span { transform: rotate(45deg); line-height: 1; }
       .pin--on { background: var(--pin-on); color: var(--accent); width: 34px; height: 34px; font-size: 15px; z-index: 5; }
       .pin--closed { background: var(--pin-closed); color: var(--ink); }
+      /* ピンの見た目は変えず、マーカー要素のタップ判定だけを広げる（通常ピン42px四方・選択中48px四方） */
+      #map .maplibregl-marker { cursor: pointer; }
+      #map .maplibregl-marker::after { content: ""; position: absolute; inset: -7px; border-radius: 50%; }
+
+      /* ---- Cluster pins (overlapping pins grouped app-side) ---- */
+      .cluster-layer { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+      .cluster-pin {
+        position: absolute; transform: translate(-50%, -50%);
+        min-width: 42px; height: 42px; padding: 0 9px;
+        appearance: none; border-radius: 999px;
+        background: rgba(227, 166, 43, .2);
+        border: 2px solid var(--accent); color: var(--accent-deep);
+        font: inherit; font-size: 16px; font-weight: 900; line-height: 1;
+        display: inline-flex; align-items: center; justify-content: center; gap: 2px;
+        cursor: pointer; pointer-events: auto;
+        box-shadow: 0 2px 6px rgba(22, 48, 42, .28);
+        touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+      }
+      .cluster-pin .c-closed { font-size: 11px; font-weight: 700; white-space: nowrap; }
+      .cluster-pin:focus-visible { outline: 3px solid var(--pin-on); outline-offset: 2px; }
+      .cluster-list {
+        position: absolute; z-index: 12; width: 232px; max-width: calc(100% - 12px);
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        box-shadow: var(--shadow); padding: 10px;
+      }
+      .cluster-list .cl-title { margin: 0 26px 6px 2px; font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+      .cluster-list .cl-item {
+        appearance: none; width: 100%; display: flex; align-items: center; gap: 8px;
+        background: transparent; border: none; border-radius: 8px;
+        padding: 9px 8px; font: inherit; font-size: 14.5px; font-weight: 700; color: var(--ink);
+        text-align: left; cursor: pointer;
+        touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+      }
+      .cluster-list .cl-item:active { background: var(--surface-2); }
+      .cluster-list .cl-item .badge { margin-left: auto; flex: 0 0 auto; }
+      .cluster-list-close {
+        position: absolute; top: 4px; right: 4px;
+        appearance: none; border: none; background: transparent; color: var(--ink-soft);
+        font: inherit; font-size: 18px; line-height: 1; width: 32px; height: 32px;
+        cursor: pointer; border-radius: 8px;
+      }
 
       /* ---- Cards ---- */
       .cards { display: grid; gap: 12px; }
@@ -177,6 +218,7 @@
       .meta .town { font-weight: 700; }
       .meta .genre { color: var(--ink-soft); }
       .meta .hours { color: var(--ink); }
+      .meta .dist { color: var(--ink-soft); font-weight: 600; }
       .note { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-soft); }
       /* ---- Search, genre chips & sort ---- */
       .controls {
@@ -294,6 +336,10 @@
         #map { height: 100%; border: none; border-radius: 0; }
         .map-note { display: none; }
         .map-popup { display: none; }
+        .cluster-list {
+          left: 12px !important; right: 12px; width: auto; max-width: none;
+          top: auto !important; bottom: calc(var(--sheet-h, 92px) + 12px);
+        }
         .map-fallback {
           position: absolute; top: 118px; left: 12px; right: 12px;
           max-height: calc(100% - 250px); overflow-y: auto;
@@ -304,8 +350,9 @@
           position: absolute; top: 0; left: 0; right: 0; z-index: 31;
           margin: 0; padding: calc(env(safe-area-inset-top) + 10px) 12px 0;
           display: block; background: transparent; border-bottom: none;
+          pointer-events: none;
         }
-        .search-wrap { flex: none; max-width: none; }
+        .search-wrap { flex: none; max-width: none; pointer-events: auto; }
         .search-wrap input { height: 42px; border-radius: 12px; box-shadow: var(--shadow); }
 
         /* Floating filter row: day chips + genre chips in one scrollable row */
@@ -313,9 +360,10 @@
           position: absolute; top: calc(env(safe-area-inset-top) + 58px); left: 0; right: 0; z-index: 30;
           margin: 0; padding: 6px 12px 4px;
           background: transparent; border-bottom: none;
+          pointer-events: none;
         }
-        .daybar .days { max-width: none; align-items: center; }
-        .daybar .day-btn, .daybar .chip { box-shadow: 0 1px 5px rgba(22, 48, 42, .20); }
+        .daybar .days { max-width: none; align-items: center; pointer-events: none; }
+        .daybar .day-btn, .daybar .chip { box-shadow: 0 1px 5px rgba(22, 48, 42, .20); pointer-events: auto; }
         .daybar .chip { flex: 0 0 auto; }
 
         /* Locate button (right side of the map, floats above the sheet) */
