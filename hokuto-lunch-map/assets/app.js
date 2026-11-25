@@ -644,6 +644,8 @@
       var lastPts = null; // 直近のマーカーのアンカー座標（currentPinShops と同順）
       var clusterSig = "";
       var clusterRafId = 0;
+      var clusterPrevPts = null; // 前回測定したマーカー座標（拡大・移動の最中かどうか＝座標が安定したかの判定用）
+      var clusterSettleTimer = 0;
 
       function ensureClusterEls() {
         if (!clusterLayerEl) {
@@ -709,13 +711,35 @@
       function computeClusters() {
         ensureClusterEls();
         if (mapFailed || !currentPinShops.length) {
-          clusterGroups = []; lastPts = null; clusterSig = "";
+          clusterGroups = []; lastPts = null; clusterSig = ""; clusterPrevPts = null;
           clusterLayerEl.innerHTML = "";
+          clusterLayerEl.style.visibility = "";
           return;
         }
         var pts = markerPoints();
-        if (!pts) return; // マーカー描画の途中。次の変化で再計算される
+        if (!pts) {
+          // マーカー描画の途中。古い座標のまとめピンを残さないよう隠し、次の変化で再計算する
+          clusterLayerEl.style.visibility = "hidden";
+          return;
+        }
         lastPts = pts;
+        // 拡大・移動のアニメーション中はマーカー座標がフレームごとに変わる。
+        // 前回の測定から座標が動いている間は、古い座標のまとめピンを出さないよう
+        // レイヤーを隠し、座標が安定した時点でまとめて描き直す。
+        var moved = !clusterPrevPts || clusterPrevPts.length !== pts.length;
+        if (!moved) {
+          for (var ci = 0; ci < pts.length; ci++) {
+            if (Math.abs(pts[ci].x - clusterPrevPts[ci].x) > 1 || Math.abs(pts[ci].y - clusterPrevPts[ci].y) > 1) { moved = true; break; }
+          }
+        }
+        clusterPrevPts = pts;
+        if (moved) {
+          clusterLayerEl.style.visibility = "hidden";
+          if (clusterSettleTimer) clearTimeout(clusterSettleTimer);
+          clusterSettleTimer = setTimeout(scheduleClusterUpdate, 90);
+          return;
+        }
+        clusterLayerEl.style.visibility = "";
         var sig = (selectedId || "") + "|" + currentPinClosed.map(function (c) { return c ? "1" : "0"; }).join("")
           + "|" + pts.map(function (p) { return Math.round(p.x) + "," + Math.round(p.y); }).join(";");
         if (sig === clusterSig) return;
@@ -752,13 +776,18 @@
           var v = inGroup[i] ? "hidden" : "";
           if (p.el.style.visibility !== v) p.el.style.visibility = v;
         });
-        clusterLayerEl.innerHTML = clusterGroups.map(function (g, gi) {
-          return '<button type="button" class="cluster-pin" data-group="' + gi + '" style="left:' + g.x.toFixed(1) + 'px;top:' + (g.y - 14).toFixed(1) + 'px" aria-label="'
+        // 地図の表示範囲の外にあるグループは描かない（はみ出し分はレイヤーの overflow でも切り取る）
+        var wrapSize = mapWrapEl.getBoundingClientRect();
+        var pinsHtml = "";
+        clusterGroups.forEach(function (g, gi) {
+          if (g.x < -26 || g.x > wrapSize.width + 26 || g.y - 14 < -26 || g.y - 14 > wrapSize.height + 26) return;
+          pinsHtml += '<button type="button" class="cluster-pin" data-group="' + gi + '" style="left:' + g.x.toFixed(1) + 'px;top:' + (g.y - 14).toFixed(1) + 'px" aria-label="'
             + g.members.length + '店が重なっています">'
             + '<span>' + g.members.length + '</span>'
             + (g.closedCount ? '<span class="c-closed">（休' + g.closedCount + '）</span>' : '')
             + '</button>';
-        }).join("");
+        });
+        clusterLayerEl.innerHTML = pinsHtml;
       }
 
       // 地図の移動・ズーム（マーカーやキャンバスの style 変化）を検知してまとめ直す
