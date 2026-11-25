@@ -257,8 +257,10 @@
           .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
       }
 
-      // ---- 臨時休業情報: 別ページに置いたデータを開くたびに読み込む（このページには埋め込まない） ----
-      var STATUS_URL = "https://t2hnd-agents.github.io/hokuto-lunch-map/today_status.json";
+      // ---- 臨時休業情報: Algolia の hokuto_lunch_status インデックスを開くたびに読み込む（このページには埋め込まない） ----
+      var ALGOLIA_STATUS_URL = "https://RSD0T4TUIS-dsn.algolia.net/1/indexes/hokuto_lunch_status/query";
+      var ALGOLIA_APP_ID = "RSD0T4TUIS";
+      var ALGOLIA_SEARCH_KEY = "54058979f73420688527b00232720672";
 
       function renderTodayError() {
         var loading = document.getElementById("today-loading");
@@ -304,14 +306,26 @@
       }
 
       function loadTodayStatus() {
-        fetch(STATUS_URL, { cache: "no-store" })
+        fetch(ALGOLIA_STATUS_URL, {
+          method: "POST",
+          headers: {
+            "X-Algolia-Application-Id": ALGOLIA_APP_ID,
+            "X-Algolia-API-Key": ALGOLIA_SEARCH_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ params: "query=&hitsPerPage=1" })
+        })
           .then(function (res) {
             if (!res.ok) throw new Error("HTTP " + res.status);
             return res.json();
           })
           .then(function (data) {
-            if (!data || typeof data !== "object") throw new Error("bad payload");
-            renderTodayStatus(data);
+            if (!data || typeof data !== "object" || !Array.isArray(data.hits) || !data.hits.length) {
+              throw new Error("bad payload");
+            }
+            var record = data.hits[0];
+            if (!record || typeof record !== "object") throw new Error("bad payload");
+            renderTodayStatus(record);
           })
           .catch(function () {
             renderTodayError();
