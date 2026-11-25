@@ -793,15 +793,20 @@
       mapEl.addEventListener("pointercancel", function () { markerTapStart = null; });
 
       // Web Mercator のズーム0基準の投影（まとめピンの拡大範囲の計算用）
+      // 地図ライブラリ（MapLibre 系）はタイルサイズ 512px 前提で、ズーム z のとき
+      // 世界の幅は 512 * 2^z px になる。ここを 256 で計算すると、求めたズームを
+      // そのまま地図に渡したときに約1段深く拡大してしまい、縦に長いグループでは
+      // メンバーが画面の上下に飛んでしまう。そのため投影は 512 基準に合わせる。
+      var WORLD_PX = 512;
       function project0(lat, lng) {
-        var x = (lng + 180) / 360 * 256;
+        var x = (lng + 180) / 360 * WORLD_PX;
         var s = Math.sin(lat * Math.PI / 180);
-        var y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 256;
+        var y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * WORLD_PX;
         return { x: x, y: y };
       }
       function unproject0(x, y) {
-        var lng = x / 256 * 360 - 180;
-        var n = Math.PI - 2 * Math.PI * y / 256;
+        var lng = x / WORLD_PX * 360 - 180;
+        var n = Math.PI - 2 * Math.PI * y / WORLD_PX;
         var lat = 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
         return { lat: lat, lng: lng };
       }
@@ -816,7 +821,7 @@
             var pa = project0(a.lat, a.lng), pb = project0(b.lat, b.lng);
             var wdx = pb.x - pa.x, wdy = pb.y - pa.y;
             var wd = Math.sqrt(wdx * wdx + wdy * wdy);
-            if (wd < 0.5) continue;
+            if (wd < 0.02) continue;
             var pdx = lastPts[j].x - lastPts[i].x, pdy = lastPts[j].y - lastPts[i].y;
             var pd = Math.sqrt(pdx * pdx + pdy * pdy);
             if (!best || wd > best.wd) best = { wd: wd, pd: pd };
@@ -825,8 +830,13 @@
         if (!best || best.pd <= 0) return null;
         return Math.log2(best.pd / best.wd);
       }
-      // グループ全体が収まる表示範囲（fitBounds 相当）を計算する
-      function fitViewForShops(shops) {
+      // グループ全体が収まる表示範囲（fitBounds 相当）を計算する。
+      // 地図要素の実際の幅・高さの両方を使い、横・縦それぞれで全メンバーが収まる
+      // 拡大率のうち小さい方（より浅い方）を選ぶ。中心はまとめピンの位置ではなく
+      // メンバー全体の外接範囲の中心にし、スマホでは上に重なる絞り込み帯と
+      // 下のシートに隠れない「見える範囲」の中心に来るようずらす。
+      // 最後に安全マージンとしてズームを 0.4 段浅くする。
+      function fitViewForShops(shops, memberIdx) {
         var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         shops.forEach(function (s) {
           var p = project0(s.lat, s.lng);
@@ -836,27 +846,61 @@
           if (p.y > maxY) maxY = p.y;
         });
         var dx = Math.max(maxX - minX, 0.0001), dy = Math.max(maxY - minY, 0.0001);
-        var w = mapEl.clientWidth || 600;
-        var h = mapEl.clientHeight || 400;
-        if (isNarrow()) h = Math.max(h - listColEl.offsetHeight, 200);
-        // 余白（パディング）を広めに取り、全メンバーがピン本体ごと画面内に収まるようにする
-        var availW = Math.max(w - 176, 120), availH = Math.max(h - 176, 120);
+        // 地図要素の実際の大きさ（レイアウト確定後の実測値を使う）
+        var rect = mapEl.getBoundingClientRect();
+        var w = mapEl.clientWidth || Math.round(rect.width) || 600;
+        var h = mapEl.clientHeight || Math.round(rect.height) || 400;
+        // 地図の上に重なって見えない帯: 上＝曜日・ジャンルの帯、下＝ボトムシート
+        var topOcc = 0, botOcc = 0;
+        if (isNarrow()) {
+          botOcc = Math.min((typeof listColEl !== "undefined" && listColEl) ? listColEl.offsetHeight : 0, h);
+          var dbRect = (typeof daybarEl !== "undefined" && daybarEl) ? daybarEl.getBoundingClientRect() : null;
+          if (dbRect) topOcc = Math.max(0, Math.min(dbRect.bottom - rect.top, h));
+        }
+        var visW = Math.max(w, 160), visH = Math.max(h - topOcc - botOcc, 160);
+        // 余白（パディング）を広めに取り、全メンバーがピン本体ごと見える範囲に収まるようにする
+        var availW = Math.max(visW - 176, 120), availH = Math.max(visH - 176, 120);
+        // 横・縦それぞれの収まる拡大率を求め、小さい方（浅い方）を採用する
         var zoom = Math.min(Math.log2(availW / dx), Math.log2(availH / dy));
         var cz = measureZoom();
+        // 実測の画面座標からも同じ計算を行い、より浅い方に倒す（投影前提のずれへの保険）
+        if (cz != null && memberIdx && lastPts) {
+          var sMinX = Infinity, sMinY = Infinity, sMaxX = -Infinity, sMaxY = -Infinity, sOk = true;
+          memberIdx.forEach(function (mi) {
+            var pt = lastPts[mi];
+            if (!pt) { sOk = false; return; }
+            if (pt.x < sMinX) sMinX = pt.x;
+            if (pt.x > sMaxX) sMaxX = pt.x;
+            if (pt.y < sMinY) sMinY = pt.y;
+            if (pt.y > sMaxY) sMaxY = pt.y;
+          });
+          if (sOk) {
+            var spreadX = Math.max(sMaxX - sMinX, 1), spreadY = Math.max(sMaxY - sMinY, 1);
+            var zoomEmp = cz + Math.min(Math.log2(availW / spreadX), Math.log2(availH / spreadY));
+            if (zoomEmp < zoom) zoom = zoomEmp;
+          }
+        }
         // メンバー同士がごく近い場合に必要以上に深く拡大しないよう上限を設ける:
-        // 現在のズームから最大 +3 段まで、かつ絶対上限は 15。全員が見える範囲で最も浅い拡大を選ぶ
+        // 現在のズームから最大 +3 段まで、かつ絶対上限は 15
         if (cz != null) zoom = Math.min(zoom, cz + 3);
+        var fitZoom = zoom;
+        // 安全マージン: 端のピンが切れないよう、求めた拡大率から 0.4 段浅くする
+        zoom = fitZoom - 0.4;
         zoom = Math.max(2, Math.min(15, zoom));
-        // タップしたのに全く寄らない場合だけ、上限の範囲で少しだけ寄せる
-        if (cz != null && zoom <= cz && zoom < 15) zoom = Math.min(cz + 0.75, 15);
-        var c = unproject0((minX + maxX) / 2, (minY + maxY) / 2);
+        // マージンで現在より引いてしまう場合だけ、収まる範囲を超えない範囲で少しだけ寄せる
+        if (cz != null && zoom <= cz && zoom < 15) zoom = Math.min(cz + 0.5, fitZoom, 15);
+        // 中心は外接範囲の中心。見える範囲の中心が地図要素の中心からずれている分を補正する
+        var scale = Math.pow(2, zoom);
+        var cx = (minX + maxX) / 2;
+        var cy = (minY + maxY) / 2 - (topOcc - botOcc) / 2 / scale;
+        var c = unproject0(cx, cy);
         return { center: c, zoom: Math.round(zoom * 100) / 100 };
       }
 
       function onClusterTap(g) {
         if (g.sameSpot) { showClusterList(g); return; }
         hideClusterList();
-        pendingView = fitViewForShops(g.members.map(function (mi) { return currentPinShops[mi]; }));
+        pendingView = fitViewForShops(g.members.map(function (mi) { return currentPinShops[mi]; }), g.members);
         render();
       }
 
