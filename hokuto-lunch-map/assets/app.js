@@ -835,15 +835,20 @@
           if (p.y < minY) minY = p.y;
           if (p.y > maxY) maxY = p.y;
         });
-        var dx = Math.max(maxX - minX, 0.01), dy = Math.max(maxY - minY, 0.01);
+        var dx = Math.max(maxX - minX, 0.0001), dy = Math.max(maxY - minY, 0.0001);
         var w = mapEl.clientWidth || 600;
         var h = mapEl.clientHeight || 400;
         if (isNarrow()) h = Math.max(h - listColEl.offsetHeight, 200);
-        var availW = Math.max(w - 120, 120), availH = Math.max(h - 120, 120);
+        // 余白（パディング）を広めに取り、全メンバーがピン本体ごと画面内に収まるようにする
+        var availW = Math.max(w - 176, 120), availH = Math.max(h - 176, 120);
         var zoom = Math.min(Math.log2(availW / dx), Math.log2(availH / dy));
         var cz = measureZoom();
-        if (cz != null && zoom < cz + 0.75) zoom = cz + 0.75;
-        zoom = Math.max(2, Math.min(16, zoom));
+        // メンバー同士がごく近い場合に必要以上に深く拡大しないよう上限を設ける:
+        // 現在のズームから最大 +3 段まで、かつ絶対上限は 15。全員が見える範囲で最も浅い拡大を選ぶ
+        if (cz != null) zoom = Math.min(zoom, cz + 3);
+        zoom = Math.max(2, Math.min(15, zoom));
+        // タップしたのに全く寄らない場合だけ、上限の範囲で少しだけ寄せる
+        if (cz != null && zoom <= cz && zoom < 15) zoom = Math.min(cz + 0.75, 15);
         var c = unproject0((minX + maxX) / 2, (minY + maxY) / 2);
         return { center: c, zoom: Math.round(zoom * 100) / 100 };
       }
