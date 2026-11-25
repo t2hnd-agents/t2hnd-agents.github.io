@@ -133,7 +133,7 @@
 
       /* ---- Cluster pins (overlapping pins grouped app-side) ---- */
       /* 地図の枠の外にはみ出したまとめピンを描かないよう、レイヤー自体で切り取る */
-      .cluster-layer { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; border-radius: 14px; }
+      .cluster-layer { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; clip-path: inset(0); border-radius: 14px; }
       .cluster-pin {
         position: absolute; transform: translate(-50%, -50%);
         min-width: 42px; height: 42px; padding: 0 9px;

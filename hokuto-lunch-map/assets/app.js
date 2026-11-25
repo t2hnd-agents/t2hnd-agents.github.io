@@ -682,7 +682,7 @@
       function markerPoints() {
         var markers = mapEl.querySelectorAll(".maplibregl-marker");
         if (!markers.length || markers.length !== currentPinShops.length) return null;
-        var wrapRect = mapWrapEl.getBoundingClientRect();
+        var mapRect = mapEl.getBoundingClientRect();
         var byIndex = [], seen = {}, ok = true;
         for (var k = 0; k < markers.length; k++) {
           var numEl = markers[k].querySelector(".pin span");
@@ -695,7 +695,7 @@
         var pts = [];
         for (var i = 0; i < markers.length; i++) {
           var r = ordered[i].getBoundingClientRect();
-          pts.push({ el: ordered[i], x: r.left + r.width / 2 - wrapRect.left, y: r.bottom - wrapRect.top });
+          pts.push({ el: ordered[i], x: r.left + r.width / 2 - mapRect.left, y: r.bottom - mapRect.top });
         }
         return pts;
       }
@@ -776,18 +776,34 @@
           var v = inGroup[i] ? "hidden" : "";
           if (p.el.style.visibility !== v) p.el.style.visibility = v;
         });
-        // 地図の表示範囲の外にあるグループは描かない（はみ出し分はレイヤーの overflow でも切り取る）
-        var wrapSize = mapWrapEl.getBoundingClientRect();
+        // まとめピンは地図の矩形の内側にだけ置く。座標は地図要素（#map）基準で統一する。
+        // ・中心が地図の外にあるグループは、要素自体を作らない（余白つきの許容はしない）
+        // ・中心が内側でも端に近いグループは、ピン全体（半径約24px）が地図内に収まる位置へ寄せる
+        // レイヤーの overflow / clip-path による切り取りは補助で、上の2つで枠外描画を防ぐ。
+        var mapSize = mapEl.getBoundingClientRect();
         var pinsHtml = "";
         clusterGroups.forEach(function (g, gi) {
-          if (g.x < -26 || g.x > wrapSize.width + 26 || g.y - 14 < -26 || g.y - 14 > wrapSize.height + 26) return;
-          pinsHtml += '<button type="button" class="cluster-pin" data-group="' + gi + '" style="left:' + g.x.toFixed(1) + 'px;top:' + (g.y - 14).toFixed(1) + 'px" aria-label="'
+          var cx = g.x, cy = g.y - 14;
+          if (cx < 0 || cx > mapSize.width || cy < 0 || cy > mapSize.height) return;
+          var mx = g.closedCount ? 44 : 24; // 「（休n）」ラベル付きはピンが横に広い
+          cx = Math.min(Math.max(cx, mx), Math.max(mx, mapSize.width - mx));
+          cy = Math.min(Math.max(cy, 24), Math.max(24, mapSize.height - 24));
+          pinsHtml += '<button type="button" class="cluster-pin" data-group="' + gi + '" style="left:' + cx.toFixed(1) + 'px;top:' + cy.toFixed(1) + 'px" aria-label="'
             + g.members.length + '店が重なっています">'
             + '<span>' + g.members.length + '</span>'
             + (g.closedCount ? '<span class="c-closed">（休' + g.closedCount + '）</span>' : '')
             + '</button>';
         });
         clusterLayerEl.innerHTML = pinsHtml;
+        // 描画後の実測チェック: 地図の矩形からはみ出したピンは DOM から取り除く
+        // （座標の測り違いなど、計算側で防ぎきれないケースへの最終保証）
+        if (pinsHtml) {
+          var mr = mapEl.getBoundingClientRect();
+          clusterLayerEl.querySelectorAll(".cluster-pin").forEach(function (p) {
+            var r = p.getBoundingClientRect();
+            if (r.left < mr.left - 1 || r.top < mr.top - 1 || r.right > mr.right + 1 || r.bottom > mr.bottom + 1) p.remove();
+          });
+        }
       }
 
       // 地図の移動・ズーム（マーカーやキャンバスの style 変化）を検知してまとめ直す
