@@ -4,41 +4,35 @@
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://external.xx.fbcdn.net; connect-src 'self' https://RSD0T4TUIS-dsn.algolia.net https://external.xx.fbcdn.net; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="light" />
     <link rel="icon" href="data:," />
     <title>北杜市ランチマップ</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="assets/map.css" />
     <style>
       :root {
-        color-scheme: light dark;
-        --bg: #f6f3ec;
-        --surface: #fffdf8;
-        --surface-2: #efe9db;
-        --ink: #2b2421;
-        --ink-soft: #6d6357;
-        --line: #ddd3c0;
-        --accent: #a33e1f;
-        --accent-ink: #fff8f1;
-        --accent-soft: #f3ddd2;
-        --pin: #a33e1f;
-        --pin-on: #1f5fa3;
-        --shadow: 0 1px 2px rgba(60, 42, 20, .08), 0 6px 18px rgba(60, 42, 20, .07);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #17140f;
-          --surface: #221e17;
-          --surface-2: #2c2619;
-          --ink: #f0e9dc;
-          --ink-soft: #b3a892;
-          --line: #423a2c;
-          --accent: #e0784a;
-          --accent-ink: #241109;
-          --accent-soft: #46281a;
-          --pin: #e0784a;
-          --pin-on: #6db3f2;
-          --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.35);
-        }
+        color-scheme: light;
+        --bg: #e4ebdf;
+        --surface: #ffffff;
+        --surface-2: #e9efe3;
+        --ink: #16302a;
+        --ink-soft: #52665e;
+        --divider: #eaeeea;
+        --line: #d0d8d2;
+        --accent: #e3a62b;
+        --accent-ink: #16302a;
+        --accent-deep: #7a5508;
+        --accent-soft: #f7e8c3;
+        --pin: #e3a62b;
+        --pin-on: #16302a;
+        --pin-closed: #a2a9a4;
+        --closed: #b3261e;
+        --closed-bg: #f9e4e1;
+        --open-bg: #e1f0e4;
+        --open-ink: #17663a;
+        --shadow: 0 1px 2px rgba(22, 48, 42, .07), 0 6px 18px rgba(22, 48, 42, .06);
       }
       * { box-sizing: border-box; }
       html { -webkit-text-size-adjust: 100%; }
@@ -46,17 +40,16 @@
         margin: 0;
         background: var(--bg);
         color: var(--ink);
-        font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+        font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
         line-height: 1.55;
       }
-      .wrap { max-width: 1060px; margin: 0 auto; padding: 0 16px 40px; }
+      .wrap { max-width: 1280px; margin: 0 auto; padding: 0 16px 40px; }
 
       header.page-head { padding: 22px 2px 6px; }
       header.page-head h1 {
         margin: 0;
-        font-family: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", serif;
         font-size: clamp(26px, 5.4vw, 38px);
-        font-weight: 700;
+        font-weight: 900;
         letter-spacing: .02em;
       }
       header.page-head p { margin: 6px 0 0; color: var(--ink-soft); font-size: 14px; }
@@ -65,12 +58,12 @@
       .daybar {
         position: sticky; top: 0; z-index: 30;
         margin: 14px -16px 0; padding: 8px 16px;
-        background: var(--bg);
-        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        border-bottom: 1px solid var(--divider);
       }
       .daybar .days {
         display: flex; gap: 6px;
-        max-width: 1060px; margin: 0 auto;
+        max-width: 1280px; margin: 0 auto;
         overflow-x: auto; scrollbar-width: none;
         -webkit-overflow-scrolling: touch;
       }
@@ -87,18 +80,13 @@
       .day-btn > span { white-space: nowrap; }
       .day-btn .cnt { font-size: 11.5px; font-weight: 600; color: var(--ink-soft); line-height: 1; }
       .day-btn .today-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
-      .day-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-      .day-btn[aria-pressed="true"] .cnt { color: var(--accent-ink); opacity: .85; }
-      .day-btn[aria-pressed="true"] .today-dot { background: var(--accent-ink); }
+      .day-btn[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+      .day-btn[aria-pressed="true"] .cnt { color: #fff; opacity: .75; }
+      .day-btn[aria-pressed="true"] .today-dot { background: var(--accent); }
       .day-btn:focus-visible { outline: 3px solid var(--pin-on); outline-offset: 2px; }
-      .day-btn.sat { color: #1f5fa3; }
-      .day-btn.sun { color: #b3352c; }
-      .day-btn[aria-pressed="true"].sat, .day-btn[aria-pressed="true"].sun { color: var(--accent-ink); }
-      @media (prefers-color-scheme: dark) {
-        .day-btn.sat { color: #7db8ef; }
-        .day-btn.sun { color: #f0938a; }
-        .day-btn[aria-pressed="true"].sat, .day-btn[aria-pressed="true"].sun { color: var(--accent-ink); }
-      }
+      .day-btn.sat { color: #2e5a88; }
+      .day-btn.sun { color: var(--closed); }
+      .day-btn[aria-pressed="true"].sat, .day-btn[aria-pressed="true"].sun { color: #fff; }
 
       .result-line { margin: 16px 2px 10px; font-size: 15px; color: var(--ink-soft); }
       .result-line strong { color: var(--ink); font-size: 17px; }
@@ -106,12 +94,16 @@
       /* ---- Layout ---- */
       .layout { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: start; }
       .map-col { order: -1; }
+      .list-col > .today-status { margin-top: 0; }
       @media (min-width: 880px) {
-        .layout { grid-template-columns: minmax(0, 1fr) 400px; }
-        .map-col { order: 0; position: sticky; top: 70px; }
+        /* PC: 左に一覧（約380px）、右に地図（残り全幅）の2カラム */
+        .layout { grid-template-columns: 380px minmax(0, 1fr); gap: 22px; }
+        .map-col { order: 0; position: sticky; top: 76px; }
       }
       #map { height: 340px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
-      @media (min-width: 880px) { #map { height: 480px; } }
+      @media (min-width: 880px) {
+        #map { height: calc(100vh - 120px); height: calc(100dvh - 120px); min-height: 480px; max-height: 760px; }
+      }
       .map-note { margin: 8px 2px 0; font-size: 12.5px; color: var(--ink-soft); }
       .map-fallback {
         border: 1px solid var(--line); border-radius: 14px; padding: 10px;
@@ -126,15 +118,15 @@
       .pin {
         width: 28px; height: 28px; border-radius: 50% 50% 50% 4px;
         transform: rotate(-45deg);
-        background: var(--pin); color: #fff;
+        background: var(--pin); color: var(--accent-ink);
         display: flex; align-items: center; justify-content: center;
         font-size: 13px; font-weight: 700;
         border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35);
         cursor: pointer;
       }
       .pin > span { transform: rotate(45deg); line-height: 1; }
-      .pin--on { background: var(--pin-on); width: 34px; height: 34px; font-size: 15px; z-index: 5; }
-      .pin--closed { background: #8a8378; }
+      .pin--on { background: var(--pin-on); color: var(--accent); width: 34px; height: 34px; font-size: 15px; z-index: 5; }
+      .pin--closed { background: var(--pin-closed); color: var(--ink); }
 
       /* ---- Cards ---- */
       .cards { display: grid; gap: 12px; }
@@ -147,10 +139,10 @@
       .card .top { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
       .num {
         flex: 0 0 auto; width: 26px; height: 26px; margin-top: 2px;
-        border-radius: 50%; background: var(--pin); color: #fff;
+        border-radius: 50%; background: var(--pin); color: var(--accent-ink);
         font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
       }
-      .card.map-selected .num { background: var(--pin-on); }
+      .card.map-selected .num { background: var(--pin-on); color: var(--accent); }
       .card h3 { margin: 0; font-size: 18px; line-height: 1.35; flex: 1 1 150px; min-width: 0; overflow-wrap: break-word; }
 
       /* ---- Temporary-closure status (loaded from the external data page) ---- */
@@ -164,9 +156,9 @@
         display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
       }
       .today-status h2 .checked { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
-      .today-status .stale { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--accent); }
+      .today-status .stale { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--closed); }
       .today-status .loading { margin: 10px 0 0; font-size: 14.5px; color: var(--ink-soft); }
-      .today-status .load-error { margin: 10px 0 0; font-size: 14.5px; font-weight: 700; color: var(--accent); }
+      .today-status .load-error { margin: 10px 0 0; font-size: 14.5px; font-weight: 700; color: var(--closed); }
       .today-status .none { margin: 10px 0 0; font-size: 14.5px; }
       .today-status .api-note { margin: 10px 0 0; font-size: 13.5px; color: var(--ink-soft); }
       .today-status .today-source { margin: 12px 0 0; font-size: 12.5px; color: var(--ink-soft); }
@@ -178,7 +170,7 @@
       .status-tag {
         display: inline-block; font-size: 11.5px; font-weight: 700;
         padding: 3px 9px; border-radius: 999px; white-space: nowrap;
-        background: var(--accent-soft); color: var(--accent);
+        background: var(--closed-bg); color: var(--closed);
       }
 
       .meta { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; }
@@ -186,11 +178,20 @@
       .meta .genre { color: var(--ink-soft); }
       .meta .hours { color: var(--ink); }
       .note { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-soft); }
-      /* ---- Genre chips & sort ---- */
+      /* ---- Search, genre chips & sort ---- */
       .controls {
         margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 10px 14px;
         align-items: center; justify-content: space-between;
       }
+      .search-wrap { flex: 1 1 220px; max-width: 340px; }
+      .search-wrap input {
+        width: 100%; height: 40px; padding: 0 12px;
+        font: inherit; font-size: 15px; color: var(--ink);
+        background: var(--surface); border: 1.5px solid var(--line); border-radius: 10px;
+        -webkit-appearance: none; appearance: none;
+      }
+      .search-wrap input::placeholder { color: var(--ink-soft); }
+      .search-wrap input:focus-visible { outline: 3px solid var(--pin-on); outline-offset: 1px; }
       .genre-chips { display: flex; flex-wrap: wrap; gap: 6px; }
       .chip {
         appearance: none; border: 1.5px solid var(--line);
@@ -201,8 +202,8 @@
         touch-action: manipulation; -webkit-tap-highlight-color: transparent;
       }
       .chip .chip-cnt { font-size: 11.5px; font-weight: 600; color: var(--ink-soft); }
-      .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-      .chip[aria-pressed="true"] .chip-cnt { color: var(--accent-ink); opacity: .85; }
+      .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+      .chip[aria-pressed="true"] .chip-cnt { color: #fff; opacity: .75; }
       .chip:focus-visible { outline: 3px solid var(--pin-on); outline-offset: 2px; }
       .sort-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; }
       .sort-wrap select {
@@ -212,6 +213,13 @@
         padding: 8px 10px; min-height: 40px; cursor: pointer;
       }
       .sort-wrap select:focus-visible { outline: 3px solid var(--pin-on); outline-offset: 2px; }
+      @media (min-width: 880px) {
+        /* PC: 検索・絞り込みの帯を曜日バーの下に続く白い帯にする */
+        .controls {
+          margin: 0 -16px; padding: 10px 16px 12px;
+          background: var(--surface); border-bottom: 1px solid var(--divider);
+        }
+      }
 
       /* ---- Card badges & closed state ---- */
       .badges { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -219,12 +227,9 @@
         display: inline-block; font-size: 12px; font-weight: 700;
         padding: 3px 10px; border-radius: 999px; white-space: nowrap;
       }
-      .badge--temp { background: var(--accent-soft); color: var(--accent); }
+      .badge--temp { background: var(--closed-bg); color: var(--closed); }
       .badge--cal { background: var(--surface-2); color: var(--ink-soft); border: 1px solid var(--line); }
-      .badge--open { background: #e0f1e3; color: #17663a; }
-      @media (prefers-color-scheme: dark) {
-        .badge--open { background: #1d3325; color: #7fd6a4; }
-      }
+      .badge--open { background: var(--open-bg); color: var(--open-ink); }
       .card--closed { filter: grayscale(.75); opacity: .6; }
       .cal-note { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-soft); }
 
@@ -238,7 +243,7 @@
       .links a svg { width: 15px; height: 15px; flex: 0 0 auto; }
       .route-btn { background: var(--accent); border: 1px solid var(--accent); color: var(--accent-ink); }
       .route-btn:active { opacity: .85; }
-      .ig-btn, .site-btn { color: var(--accent); border: 1px solid var(--accent); }
+      .ig-btn, .site-btn { color: var(--accent-deep); border: 1px solid var(--accent); }
       .ig-btn:active, .site-btn:active { background: var(--accent-soft); }
 
       /* ---- Untracked-source note (shops whose closures are not auto-fetched) ---- */
@@ -293,9 +298,11 @@
           left: 8px; right: 8px; bottom: 8px; top: auto;
           width: auto; max-width: none;
         }
-        /* ジャンルボタンは曜日バーと同じ1段の横スクロールにする */
-        .controls { flex-wrap: nowrap; }
+        /* 検索欄は独立した1段、ジャンルボタンは曜日バーと同じ1段の横スクロールにする */
+        .controls { flex-wrap: wrap; }
+        .search-wrap { flex: 1 1 100%; max-width: none; }
         .genre-chips {
+          flex: 1 1 100%;
           flex-wrap: nowrap; overflow-x: auto; min-width: 0;
           scrollbar-width: none; -webkit-overflow-scrolling: touch;
         }
@@ -315,7 +322,7 @@
       .empty { color: var(--ink-soft); font-size: 14px; padding: 8px 2px; }
 
       footer.caution {
-        margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--line);
+        margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--divider);
         font-size: 13px; color: var(--ink-soft);
       }
       @media (prefers-reduced-motion: no-preference) {
@@ -342,6 +349,9 @@
       </div>
 
       <div class="controls">
+        <div class="search-wrap">
+          <input type="search" id="search-input" placeholder="店名・地域・ジャンルで検索" aria-label="お店を検索" autocomplete="off" />
+        </div>
         <div class="genre-chips" id="genre-chips" role="group" aria-label="ジャンルで絞り込み"></div>
         <label class="sort-wrap">並び順
           <select id="sort-sel">
